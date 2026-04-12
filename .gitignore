@@ -1,0 +1,26 @@
+# Environment — never commit credentials
+.env
+
+# Runtime state
+hvf_alerts.json
+hvf_health.json
+*.log
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
