@@ -85,24 +85,36 @@ A weekly health check also fires every 7 days confirming the scanner is alive, s
 
 ## Quick Start
 
-**One command — works on Mac, Linux, or Windows (WSL2):**
+**Setup is done through Claude Code — no terminal knowledge needed.**
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nderriman-cmd/hvf-scanner/main/setup.sh | bash
+**Step 1** — Download Claude Code (free): https://claude.ai/download
+
+**Step 2** — Open Claude Code and paste this prompt:
+
+```
+Please set up the HVF Scanner on my machine. Clone the scanner code from
+https://github.com/nderriman-cmd/hvf-scanner, set up Python and all
+dependencies, walk me through setting up a Telegram bot, configure it to
+start automatically, and confirm it is running. Handle everything using
+your tools — full instructions are in the CLAUDE.md file in the repository.
 ```
 
-The setup wizard will:
-1. Check your Python version (3.9+ required)
-2. Download the scanner
-3. Walk you through Telegram bot setup
-4. Ask where you want to run it (local / free cloud / paid cloud)
-5. Start scanning automatically
+**Step 3** — Claude will ask for your Telegram credentials (2 minutes to set up):
+1. Open Telegram → search `@BotFather` → send `/newbot` → copy the token
+2. Search `@userinfobot` → send `/start` → copy your Chat ID
+3. Paste both when Claude asks
 
-**You'll need a Telegram bot** (takes 2 minutes):
-1. Open Telegram → search `@BotFather` → send `/newbot`
-2. Copy the token it gives you
-3. Search `@userinfobot` → send `/start` → copy your Chat ID
-4. Paste both into the setup wizard when asked
+That's it. Claude handles everything else and confirms when it's running.
+
+**To update** when a new version is released, paste into Claude Code:
+```
+Update my HVF scanner
+```
+
+**To check status**, paste into Claude Code:
+```
+Check if my HVF scanner is running
+```
 
 ---
 
