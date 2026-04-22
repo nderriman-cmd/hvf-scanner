@@ -416,10 +416,11 @@ def build_health_message(state: dict, health: dict) -> str:
     """Build weekly health check Telegram message."""
     # Count active patterns by stage from state file
     active = {"forming": [], "near": [], "breakout": []}
-    for key, stage in state.items():
+    for key, info in state.items():
         parts = key.split("_")
         if len(parts) >= 2:
             symbol = parts[0]
+            stage  = info["stage"] if isinstance(info, dict) else info
             if stage in active:
                 active[stage].append(symbol)
 
@@ -518,17 +519,54 @@ def run() -> None:
                     if hvf is None:
                         continue
 
-                    key        = state_key(name, tf_label, hvf["pattern_start"])
-                    prev_stage = state.get(key)
+                    key       = state_key(name, tf_label, hvf["pattern_start"])
+                    prev_info = state.get(key)
+
+                    # ── Migrate old plain-string state entries ────────────────
+                    if isinstance(prev_info, str):
+                        prev_info = {"stage": prev_info, "locked_resistance": hvf["resistance"]}
+                        state[key] = prev_info
+
+                    prev_stage = prev_info["stage"] if prev_info else None
                     prev_rank  = STAGE_RANK.get(prev_stage, 0)
-                    cur_rank   = STAGE_RANK[hvf["stage"]]
+
+                    # ── Lock resistance at first detection (FORMING) ──────────
+                    # The polyfit resistance shifts as new pivot highs form near
+                    # the breakout zone. We lock it at first sight so the breakout
+                    # level doesn't drift upward as price approaches it.
+                    if prev_info is None:
+                        locked_res = hvf["resistance"]
+                    else:
+                        locked_res = prev_info.get("locked_resistance", hvf["resistance"])
+
+                    # ── Recompute stage using locked resistance ────────────────
+                    price    = hvf["price"]
+                    bar_high = float(df["high"].iloc[-1])
+                    near_pct = tf_cfg["near_pct"]
+
+                    dist_pct  = (locked_res - price) / price
+                    broke_out = bar_high >= locked_res
+
+                    if broke_out:
+                        cur_stage = "breakout"
+                    elif dist_pct <= near_pct:
+                        cur_stage = "near"
+                    else:
+                        cur_stage = "forming"
+
+                    cur_rank = STAGE_RANK[cur_stage]
 
                     if cur_rank > prev_rank:
+                        # Override hvf dict values with locked-resistance versions
+                        hvf["stage"]      = cur_stage
+                        hvf["dist_pct"]   = dist_pct
+                        hvf["resistance"] = locked_res
+
                         logger.info("[%s %s] %s  dist=%.1f%%  squeeze=%.0f%%  bars=%d",
-                            name, tf_label, hvf["stage"].upper(),
-                            hvf["dist_pct"] * 100, hvf["contraction_pct"], hvf["pattern_bars"])
+                            name, tf_label, cur_stage.upper(),
+                            dist_pct * 100, hvf["contraction_pct"], hvf["pattern_bars"])
                         notifier.send(build_message(name, tf_label, hvf))
-                        state[key] = hvf["stage"]
+                        state[key] = {"stage": cur_stage, "locked_resistance": locked_res}
                         save_state(state)
                         alerts_fired += 1
 
