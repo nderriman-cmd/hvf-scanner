@@ -1,23 +1,23 @@
 """
-HVF (Hunt Volatility Funnel) Scanner — v3
+HVF (Hunt Volatility Funnel) Scanner — v4
 ==========================================
-Scans crypto (Bybit) and commodities (yfinance) on 2H and 1D timeframes
+Scans crypto and commodities on 1D and 1D-macro timeframes
 for Hunt Volatility Funnel patterns.
 
 Pattern definition (calibrated against real examples):
-  - Gold Apr-Aug 2025 on 2H    : 141 days / ~1,700 bars
+  - Gold Apr-Aug 2025 on 1D    : 141 bars
   - XRP May-Dec 2017 on 1D     : 221 bars
   - Platinum 2020-2025 on 1D   : 1,877 bars (macro)
-  - Platinum Dec-Jan 2026 on 2H: 32 days / ~384 bars (short)
-  - Tron Nov 2024 onwards on 1D: 497+ bars, still forming
+  - Tron Nov 2024 onwards on 1D: 505+ bars, still forming
 
-Three alert stages (each fires ONCE per pattern, escalates upward):
-  📐 FORMING     — valid HVF detected, price still compressing inside funnel
+Four alert stages — WATCHING is weekly-snapshot only, the rest fire live Telegram alerts:
+  👁  WATCHING    — 2 pivot highs + 2 pivot lows: pattern embryo (weekly snapshot only)
+  📐 FORMING     — 3+ pivots each side, ≥20% ATR squeeze: confirmed compression
   ⚡ NEAR BREAK  — price within 5% of descending resistance line
   🚨 BREAKOUT    — bar high has touched / crossed the resistance line
 
 Asset coverage:
-  Crypto     — top 20 USDT perpetuals via Bybit
+  Crypto     — top 21 symbols via Yahoo Finance
   Commodities— Gold, Silver, Platinum, Oil, Natural Gas, Copper via yfinance
 
 Run:
@@ -59,8 +59,6 @@ logger = logging.getLogger(__name__)
 
 # ── Symbol lists ──────────────────────────────────────────────────────────────
 
-# Crypto: display label → yfinance ticker
-# All major pairs available on Yahoo Finance — no exchange API needed
 CRYPTO_SYMBOLS = {
     "BTC":   "BTC-USD",
     "ETH":   "ETH-USD",
@@ -85,7 +83,6 @@ CRYPTO_SYMBOLS = {
     "TAO":   "TAO-USD",
 }
 
-# Commodities: display label → yfinance ticker
 COMMODITY_SYMBOLS = {
     "GOLD":    "GC=F",
     "SILVER":  "SI=F",
@@ -96,46 +93,68 @@ COMMODITY_SYMBOLS = {
 }
 
 # ── Timeframe configs ─────────────────────────────────────────────────────────
-# Calibrated against real HVF examples — see module docstring
 
 TIMEFRAME_CONFIGS = {
     # Standard 1D — 2 to 7 month compression structures
-    # Catches: SOL Feb 2024 (+82%), BNB 2024, Gold Apr-Aug 2025, XRP 2017 (221 bars)
     "D": {
         "label":        "1D",
-        "pivot_lb":     5,      # 5 days each side — major weekly swing pivots
-        "min_pat_bars": 50,     # ≥50 bars (~10 weeks) minimum compression
-        "atr_contract": 0.20,   # ≥20% ATR contraction from stem
-        "window":       300,    # bars of history passed to detector each scan
-        "stem_window":  200,    # stem must be within last 200 daily bars (~7 months)
-        "near_pct":     0.05,   # within 5% of resistance = near-breakout alert
-        "cooldown_bars":30,     # ~6 weeks between signals on same pattern
+        "pivot_lb":     5,
+        "min_pat_bars": 50,
+        "atr_contract": 0.20,
+        "window":       300,
+        "stem_window":  200,
+        "near_pct":     0.05,
+        "cooldown_bars":30,
         "yf_interval":  "1d",
         "yf_period":    "10y",
-        "strict_mono":  False,  # allows ascending triangles (Gold Apr-Aug 2025)
-        "zone_mid_pct": 0.50,   # compression stays in upper half of stem range
+        "strict_mono":  False,
+        "zone_mid_pct": 0.50,
     },
     # Macro 1D — 5 month to 4 year mega compression structures
-    # Catches: TRON 489-bar (77% squeeze), LTC 952-bar (+107%), XRP Jun 2025 (+249%)
     "D-macro": {
         "label":        "1D-macro",
-        "pivot_lb":     10,     # 10-day each side — filters noise, only major pivots
-        "min_pat_bars": 150,    # ≥150 bars (~5 months) — cleanly above standard 1D
-        "atr_contract": 0.40,   # ≥40% squeeze — macro patterns compress deeply
-        "window":       1200,   # full history window
-        "stem_window":  1000,   # stem can be up to ~4 years ago
+        "pivot_lb":     10,
+        "min_pat_bars": 150,
+        "atr_contract": 0.40,
+        "window":       1200,
+        "stem_window":  1000,
         "near_pct":     0.05,
-        "cooldown_bars":150,    # one alert per mega-pattern (~6 months apart)
+        "cooldown_bars":150,
         "yf_interval":  "1d",
         "yf_period":    "10y",
-        "strict_mono":  False,  # mandatory — long patterns oscillate mid-compression
-        "zone_mid_pct": 0.25,   # allows deep retracements (TRON -52%, Plat -40%)
+        "strict_mono":  False,
+        "zone_mid_pct": 0.25,
     },
 }
 
-POLL_SECS  = 3600       # scan every 1 hour (2H/1D candles don't need faster polling)
+# ── WATCHING configs ──────────────────────────────────────────────────────────
+# Pre-FORMING stage: only 2 pivots each side required, lower ATR threshold.
+# WATCHING patterns appear in the weekly snapshot only — no live Telegram alerts.
+# Think of it as: "stem high found, first two compression pivots complete,
+# waiting to see if the third confirms the funnel."
+
+WATCHING_CONFIGS = {
+    "D": {
+        **TIMEFRAME_CONFIGS["D"],
+        "min_pivots_h": 2,      # 2 descending highs (vs 3 for FORMING)
+        "min_pivots_l": 2,      # 2 ascending lows   (vs 3 for FORMING)
+        "atr_contract": 0.08,   # 8% ATR squeeze — just starting to compress
+        "min_pat_bars": 25,     # ~5 weeks minimum (vs 50 for FORMING)
+        "body_contract": 0.10,  # 10% body compression (vs 15% for FORMING)
+    },
+    "D-macro": {
+        **TIMEFRAME_CONFIGS["D-macro"],
+        "min_pivots_h": 2,
+        "min_pivots_l": 2,
+        "atr_contract": 0.20,   # half of macro's 0.40
+        "min_pat_bars": 75,     # half of macro's 150
+        "body_contract": 0.10,
+    },
+}
+
+POLL_SECS  = 3600       # scan every 1 hour
 ALERT_FILE = "hvf_alerts.json"
-MIN_PIVOTS = 3   # 3 confirmed compression pivots each side for reliable trendlines
+MIN_PIVOTS = 3
 
 
 # ── Indicators ────────────────────────────────────────────────────────────────
@@ -172,13 +191,8 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
     """
     HVF detection built around the STEM HIGH concept.
 
-    Structure:
-      1. STEM HIGH — earliest pivot high at ≥95% of the window peak.
-         This is where compression begins (e.g. BNB March 15, Gold April 8).
-      2. Compression zone — pivot highs/lows strictly AFTER the stem.
-         Need MIN_PIVOTS of each to fit converging trendlines.
-      3. ATR and body compression measured from stem → now.
-      4. Three alert stages based on distance to resistance trendline.
+    Works for both FORMING (min_pivots=3, atr_contract=0.20+) and
+    WATCHING (min_pivots=2, atr_contract=0.08+) — controlled via tf_cfg.
     """
     lb            = tf_cfg["pivot_lb"]
     min_pat_bars  = tf_cfg["min_pat_bars"]
@@ -192,13 +206,14 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
     all_ph_idx = find_pivot_highs(df["high"], lb)
     all_pl_idx = find_pivot_lows(df["low"],   lb)
 
-    if len(all_ph_idx) < 1 or len(all_pl_idx) < MIN_PIVOTS:
+    # Use per-config min_pivots when set (WATCHING uses 2, FORMING uses 3)
+    min_piv_h = tf_cfg.get("min_pivots_h", tf_cfg.get("min_pivots", MIN_PIVOTS))
+    min_piv_l = tf_cfg.get("min_pivots_l", tf_cfg.get("min_pivots", MIN_PIVOTS))
+
+    if len(all_ph_idx) < 1 or len(all_pl_idx) < min_piv_l:
         return None
 
     # ── 1. Find the STEM HIGH ─────────────────────────────────────────────────
-    #   The HIGHEST pivot in the most recent stem_window bars.
-    #   Using a fixed lookback prevents distant peaks from overshadowing the
-    #   actual structure (e.g. a May rally masking an October HVF).
     stem_win    = tf_cfg.get("stem_window", n)
     stem_search = all_ph_idx[all_ph_idx >= max(0, n - stem_win)]
     if len(stem_search) == 0:
@@ -211,20 +226,10 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
     post_ph = all_ph_idx[all_ph_idx > stem_idx]
     post_pl = all_pl_idx[all_pl_idx > stem_idx]
 
-    # Per-config pivot count — supports separate high/low minimums.
-    # "min_pivots_h" / "min_pivots_l" let tight mode require 3 descending highs
-    # (strong resistance) but only 2 ascending lows (accommodates wick-style lows).
-    # Falls back to "min_pivots" → MIN_PIVOTS when not set.
-    min_piv_h = tf_cfg.get("min_pivots_h", tf_cfg.get("min_pivots", MIN_PIVOTS))
-    min_piv_l = tf_cfg.get("min_pivots_l", tf_cfg.get("min_pivots", MIN_PIVOTS))
-
     if len(post_ph) < min_piv_h or len(post_pl) < min_piv_l:
         return None
 
     # ── 2b. First post-stem low must CLOSE above the midpoint of the stem move ─
-    #   Uses CLOSE at the first pivot low bar (not the wick) so a flash-crash
-    #   wick that recovers above the midpoint doesn't disqualify the pattern
-    #   (e.g. HYPE June 13 wick to $37.26 but close at $38.70).
     stem_high      = float(df["high"].iloc[stem_idx])
     pre_low        = float(df["low"].iloc[max(0, stem_idx - 200) : stem_idx + 1].min())
     zone_mid_pct   = tf_cfg.get("zone_mid_pct", 0.50)
@@ -233,11 +238,7 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
     if first_pl_close < zone_mid:
         return None
 
-    # ── 3-6. Trendline fitting — strict vs relaxed mode ─────────────────────
-    #   strict_mono=True  (default): consecutive-pair monotonicity required
-    #                                classic descending-highs / ascending-lows wedge
-    #   strict_mono=False           : skips pair checks, uses ALL post-stem pivots
-    #                                catches ascending triangles (coiling at resistance)
+    # ── 3-6. Trendline fitting ───────────────────────────────────────────────
     strict_mono = tf_cfg.get("strict_mono", True)
 
     if strict_mono:
@@ -252,7 +253,6 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
         if max(ph_idx[0], pl_idx[0]) >= min(ph_idx[-1], pl_idx[-1]):
             return None
     else:
-        # Relaxed mode — use all post-stem pivots, trust the polyfit
         ph_idx    = post_ph
         pl_idx    = post_pl
         ph_prices = df["high"].iloc[ph_idx].values.astype(float)
@@ -264,8 +264,6 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
         return None
     if not strict_mono and pl_slope <= 0:
         return None
-    # Optional strict slope check — rejects falling channels where both
-    # trendlines drift downward (common source of false positives in tight mode)
     if tf_cfg.get("strict_slopes", False):
         if ph_slope >= 0 or pl_slope <= 0:
             return None
@@ -285,9 +283,7 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
     if cur - stem_idx < min_pat_bars:
         return None
 
-    # ── 9. Candle body compression from stem to now ───────────────────────────
-    #   The defining visual: candle bodies shrink toward the apex.
-    #   Threshold is configurable (tight mode uses 0.22, standard uses 0.15).
+    # ── 9. Candle body compression ────────────────────────────────────────────
     body_threshold = tf_cfg.get("body_contract", 0.15)
     pat_df     = df.iloc[stem_idx : cur + 1]
     body_sizes = (pat_df["close"] - pat_df["open"]).abs()
@@ -305,11 +301,10 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
     price      = float(df["close"].iloc[-1])
     bar_high   = float(df["high"].iloc[-1])
 
-    # Price must still be inside the funnel
     if price > resistance * 1.08 or price < support * 0.92:
         return None
 
-    dist_pct  = (resistance - price) / price   # positive = below resistance
+    dist_pct  = (resistance - price) / price
     broke_out = bar_high >= resistance
 
     if broke_out:
@@ -334,7 +329,6 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
 # ── Data fetching ─────────────────────────────────────────────────────────────
 
 def fetch_candles(yf_ticker: str, tf_cfg: dict) -> pd.DataFrame:
-    """Fetch daily OHLCV from yfinance. Works for both crypto and commodities."""
     if not YFINANCE_AVAILABLE:
         return pd.DataFrame()
     try:
@@ -380,7 +374,28 @@ def save_state(state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
-STAGE_RANK = {"forming": 1, "near": 2, "breakout": 3}
+# ── Watching state ────────────────────────────────────────────────────────────
+
+WATCHING_FILE = "hvf_watching.json"
+
+
+def load_watching() -> dict:
+    if Path(WATCHING_FILE).exists():
+        with open(WATCHING_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_watching(watching: dict) -> None:
+    with open(WATCHING_FILE, "w") as f:
+        json.dump(watching, f, indent=2)
+
+
+# ── Stage ranking ─────────────────────────────────────────────────────────────
+# WATCHING=0 (weekly snapshot only), FORMING=1, NEAR=2, BREAKOUT=3
+# Stages only escalate upward — an alert fires when cur_rank > prev_rank.
+
+STAGE_RANK = {"watching": 0, "forming": 1, "near": 2, "breakout": 3}
 
 
 def state_key(symbol: str, tf_label: str, pattern_start: int) -> str:
@@ -392,58 +407,6 @@ def state_key(symbol: str, tf_label: str, pattern_start: int) -> str:
 
 def now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
-# ── Weekly health check ───────────────────────────────────────────────────────
-
-HEALTH_CHECK_FILE = "hvf_health.json"
-HEALTH_CHECK_SECS = 7 * 24 * 3600   # every 7 days
-
-
-def load_health() -> dict:
-    if Path(HEALTH_CHECK_FILE).exists():
-        with open(HEALTH_CHECK_FILE) as f:
-            return json.load(f)
-    return {"last_check": 0, "scans_since_start": 0, "signals_since_start": 0}
-
-
-def save_health(h: dict) -> None:
-    with open(HEALTH_CHECK_FILE, "w") as f:
-        json.dump(h, f, indent=2)
-
-
-def build_health_message(state: dict, health: dict) -> str:
-    """Build weekly health check Telegram message."""
-    # Count active patterns by stage from state file
-    active = {"forming": [], "near": [], "breakout": []}
-    for key, info in state.items():
-        parts = key.split("_")
-        if len(parts) >= 2:
-            symbol = parts[0]
-            stage  = info["stage"] if isinstance(info, dict) else info
-            if stage in active:
-                active[stage].append(symbol)
-
-    forming_list  = ", ".join(sorted(set(active["forming"])))  or "none"
-    near_list     = ", ".join(sorted(set(active["near"])))     or "none"
-    breakout_list = ", ".join(sorted(set(active["breakout"]))) or "none"
-
-    total_active = sum(len(v) for v in active.values())
-
-    return (
-        f"<b>💚 HVF Scanner — Weekly Health Check</b>\n\n"
-        f"Status:         <b>Running ✓</b>\n"
-        f"Scans run:      {health['scans_since_start']:,}\n"
-        f"Signals fired:  {health['signals_since_start']:,} since start\n"
-        f"Active patterns:{total_active}\n\n"
-        f"<b>📐 Forming ({len(active['forming'])}):</b>  {forming_list}\n"
-        f"<b>⚡ Near ({len(active['near'])}):</b>      {near_list}\n"
-        f"<b>🚨 Breakout ({len(active['breakout'])}):</b> {breakout_list}\n\n"
-        f"Watching:  {len(CRYPTO_SYMBOLS)} crypto · {len(COMMODITY_SYMBOLS)} commodities\n"
-        f"Modes:     1D standard + 1D-macro\n"
-        f"Next scan: in ~1 hour\n\n"
-        f"<i>{now_utc()}</i>"
-    )
 
 
 def build_message(symbol: str, tf_label: str, hvf: dict) -> str:
@@ -474,31 +437,117 @@ def build_message(symbol: str, tf_label: str, hvf: dict) -> str:
     )
 
 
+# ── Weekly health check ───────────────────────────────────────────────────────
+
+HEALTH_CHECK_FILE = "hvf_health.json"
+HEALTH_CHECK_SECS = 7 * 24 * 3600   # every 7 days
+
+
+def load_health() -> dict:
+    if Path(HEALTH_CHECK_FILE).exists():
+        with open(HEALTH_CHECK_FILE) as f:
+            return json.load(f)
+    return {"last_check": 0, "scans_since_start": 0, "signals_since_start": 0}
+
+
+def save_health(h: dict) -> None:
+    with open(HEALTH_CHECK_FILE, "w") as f:
+        json.dump(h, f, indent=2)
+
+
+def build_health_message(state: dict, watching_state: dict, health: dict) -> str:
+    """Build weekly health check Telegram message with full pattern snapshot table."""
+
+    # Collect patterns by stage
+    by_stage: dict[str, list] = {"breakout": [], "near": [], "forming": [], "watching": []}
+
+    for key, info in state.items():
+        if not isinstance(info, dict):
+            continue
+        stage = info.get("stage", "")
+        if stage in by_stage:
+            by_stage[stage].append(info)
+
+    for key, info in watching_state.items():
+        if isinstance(info, dict) and info.get("stage") == "watching":
+            by_stage["watching"].append(info)
+
+    # Sort each stage by squeeze descending (tightest first)
+    for stage_list in by_stage.values():
+        stage_list.sort(key=lambda r: r.get("squeeze", 0), reverse=True)
+
+    total = sum(len(v) for v in by_stage.values())
+
+    def pattern_lines(items: list) -> str:
+        if not items:
+            return "  none\n"
+        lines = []
+        for r in items:
+            name    = r.get("name", "?")
+            tf      = r.get("tf", "?")
+            price   = r.get("price", 0)
+            resist  = r.get("locked_resistance", r.get("resistance", 0))
+            squeeze = r.get("squeeze", 0)
+            dist    = r.get("dist_pct", 0)
+            bars    = int(r.get("pattern_bars", 0))
+            lines.append(
+                f"  {name:<7} {tf:<10}  "
+                f"${price:>10,.4f}  \u2192${resist:>10,.4f}  "
+                f"{squeeze:>4.0f}% sq  {dist:>5.1f}% dist  {bars} bars"
+            )
+        return "\n".join(lines) + "\n"
+
+    msg = (
+        f"<b>\U0001f49a HVF Scanner \u2014 Weekly Snapshot</b>\n\n"
+        f"Status:           <b>Running \u2713</b>\n"
+        f"Scans run:        {health.get('scans_since_start', 0):,}\n"
+        f"Signals fired:    {health.get('signals_since_start', 0):,} since start\n"
+        f"Active patterns:  {total}\n"
+        f"Coverage:         {len(CRYPTO_SYMBOLS)} crypto \u00b7 "
+        f"{len(COMMODITY_SYMBOLS)} commodities \u00b7 1D + 1D-macro\n"
+        f"{'─'*44}\n"
+    )
+
+    for stage, icon, label in [
+        ("breakout", "\U0001f6a8", "BREAKOUT"),
+        ("near",     "\u26a1",    "NEAR BREAKOUT"),
+        ("forming",  "\U0001f4d0", "FORMING"),
+        ("watching", "\U0001f441", "WATCHING  \u2014 pre-forming, not yet alerted"),
+    ]:
+        items = by_stage[stage]
+        msg += f"\n<b>{icon} {label} ({len(items)})</b>\n"
+        msg += pattern_lines(items)
+
+    msg += f"\n<i>Next scan in ~1 hr \u00b7 {now_utc()}</i>"
+    return msg
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def run() -> None:
     n_crypto     = len(CRYPTO_SYMBOLS)
     n_commodity  = len(COMMODITY_SYMBOLS)
     logger.info(
-        "HVF Scanner v3 started — %d crypto + %d commodities × 1D + 1D-macro — poll every %ds",
+        "HVF Scanner v4 started — %d crypto + %d commodities × 1D + 1D-macro — poll every %ds",
         n_crypto, n_commodity, POLL_SECS,
     )
 
-    notifier = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
-    state    = load_state()
-    health   = load_health()
+    notifier      = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
+    state         = load_state()
+    watching_state = load_watching()
+    health        = load_health()
 
     notifier.send(
-        f"<b>🔍 HVF Scanner v3 started</b>\n\n"
+        f"<b>\U0001f50d HVF Scanner v4 started</b>\n\n"
         f"Crypto:      {n_crypto} symbols\n"
         f"Commodities: {n_commodity} symbols\n"
         f"Timeframes:  1D standard + 1D-macro\n"
         f"Data source: Yahoo Finance (no API key needed)\n"
-        f"Alerts:      📐 Forming  ⚡ Near  🚨 Breakout\n\n"
+        f"Alerts:      \U0001f4d0 Forming  \u26a1 Near  \U0001f6a8 Breakout\n"
+        f"Snapshot:    \U0001f441 Watching (weekly only)\n\n"
         f"<i>{now_utc()}</i>"
     )
 
-    # Build unified scan list: (display_name, yf_ticker)
     all_symbols = (
         list(CRYPTO_SYMBOLS.items()) +
         list(COMMODITY_SYMBOLS.items())
@@ -507,7 +556,7 @@ def run() -> None:
     while True:
         alerts_fired = 0
 
-        for tf_label_key, tf_cfg in TIMEFRAME_CONFIGS.items():
+        for tf_key, tf_cfg in TIMEFRAME_CONFIGS.items():
             tf_label = tf_cfg["label"]
 
             for name, ticker in all_symbols:
@@ -515,73 +564,124 @@ def run() -> None:
                     df = fetch_candles(ticker, tf_cfg)
                     if df.empty or len(df) < 100:
                         continue
+
                     hvf = detect_hvf(df, tf_cfg)
-                    if hvf is None:
-                        continue
 
-                    key       = state_key(name, tf_label, hvf["pattern_start"])
-                    prev_info = state.get(key)
+                    if hvf is not None:
+                        # ── FORMING+ pattern detected ──────────────────────────
+                        key       = state_key(name, tf_label, hvf["pattern_start"])
+                        prev_info = state.get(key)
 
-                    # ── Migrate old plain-string state entries ────────────────
-                    if isinstance(prev_info, str):
-                        prev_info = {"stage": prev_info, "locked_resistance": hvf["resistance"]}
-                        state[key] = prev_info
+                        # Migrate old plain-string state entries
+                        if isinstance(prev_info, str):
+                            prev_info = {"stage": prev_info, "locked_resistance": hvf["resistance"]}
 
-                    prev_stage = prev_info["stage"] if prev_info else None
-                    prev_rank  = STAGE_RANK.get(prev_stage, 0)
+                        prev_stage = prev_info["stage"] if prev_info else None
+                        prev_rank  = STAGE_RANK.get(prev_stage, 0)
 
-                    # ── Lock resistance at first detection (FORMING) ──────────
-                    # The polyfit resistance shifts as new pivot highs form near
-                    # the breakout zone. We lock it at first sight so the breakout
-                    # level doesn't drift upward as price approaches it.
-                    if prev_info is None:
-                        locked_res = hvf["resistance"]
+                        # Lock resistance at first detection so it can't drift upward
+                        if prev_info is None:
+                            locked_res = hvf["resistance"]
+                        else:
+                            locked_res = prev_info.get("locked_resistance", hvf["resistance"])
+
+                        # Recompute stage using the locked resistance level
+                        price    = hvf["price"]
+                        bar_high = float(df["high"].iloc[-1])
+                        near_pct = tf_cfg["near_pct"]
+                        dist_pct  = (locked_res - price) / price
+                        broke_out = bar_high >= locked_res
+
+                        if broke_out:
+                            cur_stage = "breakout"
+                        elif dist_pct <= near_pct:
+                            cur_stage = "near"
+                        else:
+                            cur_stage = "forming"
+
+                        cur_rank = STAGE_RANK[cur_stage]
+
+                        # Stage never goes backwards — keep highest reached stage
+                        effective_stage = prev_stage if prev_rank >= cur_rank else cur_stage
+
+                        if cur_rank > prev_rank:
+                            # Fire live Telegram alert on escalation
+                            hvf["stage"]      = cur_stage
+                            hvf["dist_pct"]   = dist_pct
+                            hvf["resistance"] = locked_res
+                            logger.info("[%s %s] %s  dist=%.1f%%  squeeze=%.0f%%  bars=%d",
+                                name, tf_label, cur_stage.upper(),
+                                dist_pct * 100, hvf["contraction_pct"], hvf["pattern_bars"])
+                            notifier.send(build_message(name, tf_label, hvf))
+                            alerts_fired += 1
+
+                        # Always update full snapshot data (for weekly health check)
+                        state[key] = {
+                            "stage":             effective_stage,
+                            "locked_resistance": locked_res,
+                            "support":           hvf["support"],
+                            "price":             price,
+                            "squeeze":           hvf["contraction_pct"],
+                            "dist_pct":          dist_pct * 100,
+                            "pattern_bars":      hvf["pattern_bars"],
+                            "tf":                tf_label,
+                            "name":              name,
+                        }
+
+                        # Immediate save on alert to prevent double-fires on restart
+                        if cur_rank > prev_rank:
+                            save_state(state)
+
+                        # Pattern graduated from watching — remove watching entry
+                        for wk in [k for k in list(watching_state.keys())
+                                   if k.startswith(f"w_{name}_{tf_label}_")]:
+                            del watching_state[wk]
+
                     else:
-                        locked_res = prev_info.get("locked_resistance", hvf["resistance"])
+                        # ── No FORMING+ — try WATCHING ────────────────────────
+                        watch_cfg  = WATCHING_CONFIGS.get(tf_key)
+                        stale_wks  = [k for k in list(watching_state.keys())
+                                      if k.startswith(f"w_{name}_{tf_label}_")]
 
-                    # ── Recompute stage using locked resistance ────────────────
-                    price    = hvf["price"]
-                    bar_high = float(df["high"].iloc[-1])
-                    near_pct = tf_cfg["near_pct"]
-
-                    dist_pct  = (locked_res - price) / price
-                    broke_out = bar_high >= locked_res
-
-                    if broke_out:
-                        cur_stage = "breakout"
-                    elif dist_pct <= near_pct:
-                        cur_stage = "near"
-                    else:
-                        cur_stage = "forming"
-
-                    cur_rank = STAGE_RANK[cur_stage]
-
-                    if cur_rank > prev_rank:
-                        # Override hvf dict values with locked-resistance versions
-                        hvf["stage"]      = cur_stage
-                        hvf["dist_pct"]   = dist_pct
-                        hvf["resistance"] = locked_res
-
-                        logger.info("[%s %s] %s  dist=%.1f%%  squeeze=%.0f%%  bars=%d",
-                            name, tf_label, cur_stage.upper(),
-                            dist_pct * 100, hvf["contraction_pct"], hvf["pattern_bars"])
-                        notifier.send(build_message(name, tf_label, hvf))
-                        state[key] = {"stage": cur_stage, "locked_resistance": locked_res}
-                        save_state(state)
-                        alerts_fired += 1
+                        if watch_cfg:
+                            hvf_w = detect_hvf(df, watch_cfg)
+                            if hvf_w is not None:
+                                wkey = "w_" + state_key(name, tf_label, hvf_w["pattern_start"])
+                                watching_state[wkey] = {
+                                    "stage":        "watching",
+                                    "name":         name,
+                                    "tf":           tf_label,
+                                    "resistance":   hvf_w["resistance"],
+                                    "support":      hvf_w["support"],
+                                    "price":        hvf_w["price"],
+                                    "squeeze":      hvf_w["contraction_pct"],
+                                    "dist_pct":     hvf_w["dist_pct"] * 100,
+                                    "pattern_bars": hvf_w["pattern_bars"],
+                                }
+                            else:
+                                # No watching pattern — clean up stale entries
+                                for wk in stale_wks:
+                                    del watching_state[wk]
+                        else:
+                            for wk in stale_wks:
+                                del watching_state[wk]
 
                 except Exception as exc:
                     logger.warning("[%s %s] %s", name, tf_label, exc)
 
+        # ── End-of-scan save (persists snapshot data updates) ─────────────────
+        save_state(state)
+        save_watching(watching_state)
+
         # ── Update health counters ────────────────────────────────────────────
-        health["scans_since_start"] = health.get("scans_since_start", 0) + 1
+        health["scans_since_start"]  = health.get("scans_since_start", 0)  + 1
         health["signals_since_start"] = health.get("signals_since_start", 0) + alerts_fired
 
         # ── Weekly health check ───────────────────────────────────────────────
         now_ts = time.time()
         if now_ts - health.get("last_check", 0) >= HEALTH_CHECK_SECS:
-            logger.info("Sending weekly health check")
-            notifier.send(build_health_message(state, health))
+            logger.info("Sending weekly health check / snapshot")
+            notifier.send(build_health_message(state, watching_state, health))
             health["last_check"] = now_ts
 
         save_health(health)

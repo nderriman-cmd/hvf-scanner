@@ -4,6 +4,7 @@
 # Runtime state
 hvf_alerts.json
 hvf_health.json
+hvf_watching.json
 *.log
 
 # Python
