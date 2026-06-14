@@ -109,6 +109,8 @@ TIMEFRAME_CONFIGS = {
         "yf_period":    "10y",
         "strict_mono":  False,
         "zone_mid_pct": 0.50,
+        "vol_contract": 0.0,    # funnel-body volume must be non-rising (gentle).
+                                # Raise to 0.20-0.40 to demand a visible dry-up.
     },
     # Macro 1D — 5 month to 4 year mega compression structures
     "D-macro": {
@@ -124,6 +126,7 @@ TIMEFRAME_CONFIGS = {
         "yf_period":    "10y",
         "strict_mono":  False,
         "zone_mid_pct": 0.25,
+        "vol_contract": 0.0,    # see "D" — macro funnels dry up too, non-rising default
     },
 }
 
@@ -141,6 +144,7 @@ WATCHING_CONFIGS = {
         "atr_contract": 0.08,   # 8% ATR squeeze — just starting to compress
         "min_pat_bars": 25,     # ~5 weeks minimum (vs 50 for FORMING)
         "body_contract": 0.10,  # 10% body compression (vs 15% for FORMING)
+        "vol_contract": -1.0,   # disabled — early patterns haven't dried up yet
     },
     "D-macro": {
         **TIMEFRAME_CONFIGS["D-macro"],
@@ -149,6 +153,7 @@ WATCHING_CONFIGS = {
         "atr_contract": 0.20,   # half of macro's 0.40
         "min_pat_bars": 75,     # half of macro's 150
         "body_contract": 0.10,
+        "vol_contract": -1.0,   # disabled for early-stage watching
     },
 }
 
@@ -295,6 +300,36 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
     if (1.0 - body_late / body_early) < body_threshold:
         return None
 
+    # ── 9b. Volume contraction across the FUNNEL BODY ─────────────────────────
+    #   A genuine volatility funnel dries up: volume tapers as the range
+    #   compresses toward the apex. Crucially we measure contraction across the
+    #   funnel BODY only — excluding the stem spike (high volume by definition)
+    #   at the front and the breakout-approach zone (volume ramps back up) at the
+    #   back. Measuring over the whole pattern would see the breakout ramp and
+    #   wrongly reject maturing setups.
+    #
+    #   Data-quality aware: if volume is missing or mostly zero (some commodity
+    #   feeds report sparse volume), the check is skipped rather than discarding a
+    #   structurally-valid pattern. Tune via tf_cfg["vol_contract"] (default 0.0
+    #   = funnel-body volume must merely be non-rising; raise toward 0.20-0.40 to
+    #   demand a visible dry-up).
+    vol_contraction_pct = None
+    if "volume" in pat_df.columns and len(pat_df) >= 12:
+        vol = pat_df["volume"].astype(float).values
+        if (vol > 0).mean() > 0.70:                      # usable volume data
+            lo        = max(1, int(len(vol) * 0.10))     # drop stem spike
+            hi        = max(lo + 4, int(len(vol) * 0.90))# drop breakout approach
+            body_vol  = vol[lo:hi]
+            if len(body_vol) >= 4:
+                mid      = len(body_vol) // 2
+                first_h  = body_vol[:mid].mean()
+                last_h   = body_vol[mid:].mean()
+                if first_h > 0:
+                    vol_contraction = 1.0 - (last_h / first_h)
+                    vol_contraction_pct = vol_contraction * 100
+                    if vol_contraction < tf_cfg.get("vol_contract", 0.0):
+                        return None
+
     # ── Project trendlines ───────────────────────────────────────────────────
     resistance = float(ph_slope * cur + ph_intercept)
     support    = float(pl_slope * cur + pl_intercept)
@@ -321,6 +356,7 @@ def detect_hvf(df: pd.DataFrame, tf_cfg: dict):
         "dist_pct":        dist_pct,
         "stage":           stage,
         "contraction_pct": contraction * 100,
+        "vol_contraction_pct": vol_contraction_pct,
         "pattern_start":   stem_idx,
         "pattern_bars":    cur - stem_idx,
     }
@@ -430,7 +466,9 @@ def build_message(symbol: str, tf_label: str, hvf: dict) -> str:
         f"Price:         <b>${hvf['price']:,.4f}</b>\n"
         f"Support line:  ${hvf['support']:,.4f}\n"
         f"ATR squeeze:   {hvf['contraction_pct']:.0f}% contraction\n"
-        f"Pattern age:   {hvf['pattern_bars']} bars\n\n"
+        + (f"Vol taper:     {hvf['vol_contraction_pct']:.0f}% across funnel\n"
+           if hvf.get("vol_contraction_pct") is not None else "")
+        + f"Pattern age:   {hvf['pattern_bars']} bars\n\n"
         f"<i>Hunt Volatility Funnel — descending highs + ascending lows "
         f"compressing toward breakout</i>\n"
         f"<i>{now_utc()}</i>"
@@ -488,12 +526,14 @@ def build_health_message(state: dict, watching_state: dict, health: dict) -> str
             price   = r.get("price", 0)
             resist  = r.get("locked_resistance", r.get("resistance", 0))
             squeeze = r.get("squeeze", 0)
+            vtaper  = r.get("vol_taper")
             dist    = r.get("dist_pct", 0)
             bars    = int(r.get("pattern_bars", 0))
+            vol_txt = f"{vtaper:>4.0f}% vol  " if vtaper is not None else "  n/a vol  "
             lines.append(
                 f"  {name:<7} {tf:<10}  "
                 f"${price:>10,.4f}  \u2192${resist:>10,.4f}  "
-                f"{squeeze:>4.0f}% sq  {dist:>5.1f}% dist  {bars} bars"
+                f"{squeeze:>4.0f}% sq  {vol_txt}{dist:>5.1f}% dist  {bars} bars"
             )
         return "\n".join(lines) + "\n"
 
@@ -622,6 +662,7 @@ def run() -> None:
                             "support":           hvf["support"],
                             "price":             price,
                             "squeeze":           hvf["contraction_pct"],
+                            "vol_taper":         hvf.get("vol_contraction_pct"),
                             "dist_pct":          dist_pct * 100,
                             "pattern_bars":      hvf["pattern_bars"],
                             "tf":                tf_label,
@@ -655,6 +696,7 @@ def run() -> None:
                                     "support":      hvf_w["support"],
                                     "price":        hvf_w["price"],
                                     "squeeze":      hvf_w["contraction_pct"],
+                                    "vol_taper":    hvf_w.get("vol_contraction_pct"),
                                     "dist_pct":     hvf_w["dist_pct"] * 100,
                                     "pattern_bars": hvf_w["pattern_bars"],
                                 }

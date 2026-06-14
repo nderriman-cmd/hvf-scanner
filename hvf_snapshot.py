@@ -48,6 +48,7 @@ for tf_key, tf_cfg in TIMEFRAME_CONFIGS.items():
                     "stage":    hvf["stage"],
                     "dist_pct": hvf["dist_pct"] * 100,
                     "squeeze":  hvf["contraction_pct"],
+                    "vol_taper": hvf.get("vol_contraction_pct"),
                     "pat_bars": hvf["pattern_bars"],
                     "price":    hvf["price"],
                     "resist":   hvf["resistance"],
@@ -67,6 +68,7 @@ for tf_key, tf_cfg in TIMEFRAME_CONFIGS.items():
                         "stage":    "watching",
                         "dist_pct": hvf_w["dist_pct"] * 100,
                         "squeeze":  hvf_w["contraction_pct"],
+                        "vol_taper": hvf_w.get("vol_contraction_pct"),
                         "pat_bars": hvf_w["pattern_bars"],
                         "price":    hvf_w["price"],
                         "resist":   hvf_w["resistance"],
@@ -104,12 +106,13 @@ else:
             label += "  (pre-forming · 2 pivots)"
         print(f"\n  {icon} {label} ({len(sub)})")
         print(f"  {'Asset':<8} {'TF':<14} {'Price':>10}  {'Resist':>10}  "
-              f"{'Support':>10}  {'Squeeze':>8}  {'Dist':>7}  {'Bars':>6}")
-        print(f"  {'-'*80}")
+              f"{'Support':>10}  {'Squeeze':>8}  {'VolTpr':>7}  {'Dist':>7}  {'Bars':>6}")
+        print(f"  {'-'*88}")
         for _, r in sub.iterrows():
+            vt = f"{r['vol_taper']:>6.0f}%" if r.get('vol_taper') is not None else "   n/a"
             print(f"  {r['name']:<8} {r['tf']:<14} ${r['price']:>9,.4f}  "
                   f"${r['resist']:>9,.4f}  ${r['support']:>9,.4f}  "
-                  f"{r['squeeze']:>7.0f}%  {r['dist_pct']:>6.1f}%  {int(r['pat_bars']):>6}")
+                  f"{r['squeeze']:>7.0f}%  {vt}  {r['dist_pct']:>6.1f}%  {int(r['pat_bars']):>6}")
 
     print(f"\n  Total: {len(df_out)}  |  "
           f"Breakout: {(df_out['stage']=='breakout').sum()}  "
